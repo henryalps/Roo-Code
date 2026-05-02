@@ -30,6 +30,7 @@ import {
 	BEDROCK_GLOBAL_INFERENCE_MODEL_IDS,
 	BEDROCK_SERVICE_TIER_MODEL_IDS,
 	BEDROCK_SERVICE_TIER_PRICING,
+	getBedrockCustomArnBaseModelId,
 	ApiProviderError,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
@@ -42,7 +43,7 @@ import { MultiPointStrategy } from "../transform/cache-strategy/multi-point-stra
 import { ModelInfo as CacheModelInfo } from "../transform/cache-strategy/types"
 import { convertToBedrockConverseMessages as sharedConverter } from "../transform/bedrock-converse-format"
 import { getModelParams } from "../transform/model-params"
-import { shouldUseReasoningBudget } from "../../shared/api"
+import { shouldUseReasoningBudget, shouldUseReasoningEffort } from "../../shared/api"
 import { normalizeToolSchema } from "../../utils/json-schema"
 import type { SingleCompletionHandler, ApiHandlerCreateMessageMetadata } from "../index"
 
@@ -61,9 +62,16 @@ interface BedrockInferenceConfig {
 // Define interface for Bedrock additional model request fields
 // This includes thinking configuration, 1M context beta, and other model-specific parameters
 interface BedrockAdditionalModelFields {
-	thinking?: {
-		type: "enabled"
-		budget_tokens: number
+	thinking?:
+		| {
+				type: "enabled"
+				budget_tokens: number
+		  }
+		| {
+				type: "adaptive"
+		  }
+	output_config?: {
+		effort: "low" | "medium" | "high"
 	}
 	anthropic_beta?: string[]
 	[key: string]: any // Add index signature to be compatible with DocumentType
@@ -241,7 +249,8 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 				this.options.awsRegion = this.arnInfo.region
 			}
 
-			this.options.apiModelId = this.arnInfo.modelId
+			const customArnBaseModelId = getBedrockCustomArnBaseModelId(this.options.apiModelId)
+			this.options.apiModelId = customArnBaseModelId ? this.options.apiModelId : this.arnInfo.modelId
 			if (this.arnInfo.awsUseCrossRegionInference) this.options.awsUseCrossRegionInference = true
 		}
 
@@ -380,18 +389,39 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 		let additionalModelRequestFields: BedrockAdditionalModelFields | undefined
 		let thinkingEnabled = false
+		let includeAnthropicVersion = false
 
 		// Determine if thinking should be enabled
 		// metadata?.thinking?.enabled: Explicitly enabled through API metadata (direct request)
 		// shouldUseReasoningBudget(): Enabled through user settings (enableReasoningEffort = true)
 		const isThinkingExplicitlyEnabled = metadata?.thinking?.enabled
+		const adaptiveThinkingEffort = this.getAdaptiveThinkingEffort(modelConfig, isThinkingExplicitlyEnabled)
 		const isThinkingEnabledBySettings =
 			shouldUseReasoningBudget({ model: modelConfig.info, settings: this.options }) &&
 			modelConfig.reasoning &&
 			modelConfig.reasoningBudget
 
-		if ((isThinkingExplicitlyEnabled || isThinkingEnabledBySettings) && modelConfig.info.supportsReasoningBudget) {
+		if (adaptiveThinkingEffort) {
 			thinkingEnabled = true
+			additionalModelRequestFields = {
+				thinking: {
+					type: "adaptive",
+				},
+				output_config: {
+					effort: adaptiveThinkingEffort,
+				},
+			}
+			logger.info("Adaptive thinking enabled for Bedrock request", {
+				ctx: "bedrock",
+				modelId: modelConfig.id,
+				effort: adaptiveThinkingEffort,
+			})
+		} else if (
+			(isThinkingExplicitlyEnabled || isThinkingEnabledBySettings) &&
+			modelConfig.info.supportsReasoningBudget
+		) {
+			thinkingEnabled = true
+			includeAnthropicVersion = true
 			additionalModelRequestFields = {
 				thinking: {
 					type: "enabled",
@@ -407,7 +437,9 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 		const inferenceConfig: BedrockInferenceConfig = {
 			maxTokens: modelConfig.maxTokens || (modelConfig.info.maxTokens as number),
-			temperature: modelConfig.temperature ?? (this.options.modelTemperature as number),
+			...(modelConfig.info.supportsTemperature !== false && {
+				temperature: modelConfig.temperature ?? (this.options.modelTemperature as number),
+			}),
 		}
 
 		// Check if 1M context is enabled for supported Claude 4 models
@@ -465,7 +497,7 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 			inferenceConfig,
 			...(additionalModelRequestFields && { additionalModelRequestFields }),
 			// Add anthropic_version at top level when using thinking features
-			...(thinkingEnabled && { anthropic_version: "bedrock-2023-05-31" }),
+			...(includeAnthropicVersion && { anthropic_version: "bedrock-2023-05-31" }),
 			toolConfig,
 			// Add service_tier as a top-level parameter (not inside additionalModelRequestFields)
 			...(useServiceTier && { service_tier: this.options.awsBedrockServiceTier }),
@@ -747,7 +779,9 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 			const inferenceConfig: BedrockInferenceConfig = {
 				maxTokens: modelConfig.maxTokens || (modelConfig.info.maxTokens as number),
-				temperature: modelConfig.temperature ?? (this.options.modelTemperature as number),
+				...(modelConfig.info.supportsTemperature !== false && {
+					temperature: modelConfig.temperature ?? (this.options.modelTemperature as number),
+				}),
 			}
 
 			// For completePrompt, use a unique conversation ID based on the prompt
@@ -1072,7 +1106,21 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 
 		// If custom ARN is provided, use it
 		if (this.options.awsCustomArn) {
-			modelConfig = this.getModelById(this.arnInfo.modelId, this.arnInfo.modelType)
+			const customArnBaseModelId = getBedrockCustomArnBaseModelId(this.options.apiModelId)
+			modelConfig = customArnBaseModelId
+				? this.getModelById(customArnBaseModelId)
+				: this.getModelById(this.arnInfo.modelId, this.arnInfo.modelType)
+
+			if (this.options.apiModelId === "custom-arn-opus4.7") {
+				modelConfig.info = {
+					...modelConfig.info,
+					supportsTemperature: false,
+					supportsReasoningBudget: false,
+					requiredReasoningBudget: false,
+					maxThinkingTokens: undefined,
+					supportsReasoningEffort: ["disable", "low", "medium", "high"],
+				}
+			}
 
 			//If the user entered an ARN for a foundation-model they've done the same thing as picking from our list of options.
 			//We leave the model data matching the same as if a drop-down input method was used by not overwriting the model ID with the user input ARN
@@ -1178,6 +1226,53 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH
 			(modelConfig?.info as any)?.cachableFields &&
 			(modelConfig?.info as any)?.cachableFields?.length > 0
 		)
+	}
+
+	private getAdaptiveThinkingEffort(
+		modelConfig: {
+			id: BedrockModelId | string
+			info: ModelInfo
+			reasoningEffort?: string
+		},
+		isThinkingExplicitlyEnabled?: boolean,
+	): "low" | "medium" | "high" | undefined {
+		if (
+			!this.options.awsCustomArn ||
+			getBedrockCustomArnBaseModelId(this.options.apiModelId) !== "anthropic.claude-opus-4-7"
+		) {
+			return undefined
+		}
+
+		if (isThinkingExplicitlyEnabled) {
+			return this.normalizeAdaptiveThinkingEffort(this.options.reasoningEffort) ?? "medium"
+		}
+
+		if (
+			!modelConfig.info.supportsReasoningEffort ||
+			!shouldUseReasoningEffort({ model: modelConfig.info, settings: this.options })
+		) {
+			return undefined
+		}
+
+		return (
+			this.normalizeAdaptiveThinkingEffort(modelConfig.reasoningEffort ?? this.options.reasoningEffort) ??
+			"medium"
+		)
+	}
+
+	private normalizeAdaptiveThinkingEffort(effort?: string): "low" | "medium" | "high" | undefined {
+		switch (effort) {
+			case "minimal":
+			case "low":
+				return "low"
+			case "medium":
+				return "medium"
+			case "high":
+			case "xhigh":
+				return "high"
+			default:
+				return undefined
+		}
 	}
 
 	/**

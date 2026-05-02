@@ -10,6 +10,7 @@ import {
 	BEDROCK_1M_CONTEXT_MODEL_IDS,
 	BEDROCK_GLOBAL_INFERENCE_MODEL_IDS,
 	BEDROCK_SERVICE_TIER_MODEL_IDS,
+	getBedrockCustomArnBaseModelId,
 } from "@roo-code/types"
 
 import { useAppTranslation } from "@src/i18n/TranslationContext"
@@ -27,19 +28,18 @@ type BedrockProps = {
 export const Bedrock = ({ apiConfiguration, setApiConfigurationField, selectedModelInfo }: BedrockProps) => {
 	const { t } = useAppTranslation()
 	const [awsEndpointSelected, setAwsEndpointSelected] = useState(!!apiConfiguration?.awsBedrockEndpointEnabled)
+	const effectiveModelId =
+		getBedrockCustomArnBaseModelId(apiConfiguration?.apiModelId) ?? apiConfiguration?.apiModelId
 
 	// Check if the selected model supports 1M context (supported Claude 4 models)
-	const supports1MContextBeta =
-		!!apiConfiguration?.apiModelId && BEDROCK_1M_CONTEXT_MODEL_IDS.includes(apiConfiguration.apiModelId as any)
+	const supports1MContextBeta = !!effectiveModelId && BEDROCK_1M_CONTEXT_MODEL_IDS.includes(effectiveModelId as any)
 
 	// Check if the selected model supports Global Inference profile routing
 	const supportsGlobalInference =
-		!!apiConfiguration?.apiModelId &&
-		BEDROCK_GLOBAL_INFERENCE_MODEL_IDS.includes(apiConfiguration.apiModelId as any)
+		!!effectiveModelId && BEDROCK_GLOBAL_INFERENCE_MODEL_IDS.includes(effectiveModelId as any)
 
 	// Check if the selected model supports service tiers
-	const supportsServiceTiers =
-		!!apiConfiguration?.apiModelId && BEDROCK_SERVICE_TIER_MODEL_IDS.includes(apiConfiguration.apiModelId as any)
+	const supportsServiceTiers = !!effectiveModelId && BEDROCK_SERVICE_TIER_MODEL_IDS.includes(effectiveModelId as any)
 
 	// Update the endpoint enabled state when the configuration changes
 	useEffect(() => {

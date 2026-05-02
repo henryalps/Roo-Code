@@ -1,0 +1,153 @@
+name: Sync Upstream And Release VSIX
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "上游仓库（owner/repo），留空则优先使用 vars.UPSTREAM_REPO，再尝试 fork parent"
+        required: false
+        type: string
+      upstream_branch:
+        description: "上游分支，默认 main"
+        required: false
+        default: "main"
+        type: string
+      force_release:
+        description: "即使无上游更新也强制打包并创建 Release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-release-vsix
+  cancel-in-progress: false
+
+jobs:
+  sync-build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve upstream config
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          INPUT_UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          VAR_UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO }}
+          VAR_UPSTREAM_BRANCH: ${{ vars.UPSTREAM_BRANCH }}
+        run: |
+          set -euo pipefail
+
+          upstream_repo="${INPUT_UPSTREAM_REPO:-}"
+          if [ -z "$upstream_repo" ]; then
+            upstream_repo="${VAR_UPSTREAM_REPO:-}"
+          fi
+
+          if [ -z "$upstream_repo" ]; then
+            upstream_repo="$(gh api "repos/${{ github.repository }}" --jq '.parent.full_name // ""')"
+          fi
+
+          if [ -z "$upstream_repo" ]; then
+            echo "::error::未能解析上游仓库。请在 workflow_dispatch 输入 upstream_repo，或在仓库变量设置 UPSTREAM_REPO。"
+            exit 1
+          fi
+
+          upstream_branch="${INPUT_UPSTREAM_BRANCH:-}"
+          if [ -z "$upstream_branch" ]; then
+            upstream_branch="${VAR_UPSTREAM_BRANCH:-main}"
+          fi
+
+          echo "upstream_repo=$upstream_repo" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=$upstream_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream
+        id: merge
+        env:
+          UPSTREAM_REPO: ${{ steps.upstream.outputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ steps.upstream.outputs.upstream_branch }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          read -r ahead behind < <(git rev-list --left-right --count HEAD...upstream/"${UPSTREAM_BRANCH}")
+          echo "ahead=$ahead, behind=$behind"
+
+          if [ "${behind}" -eq 0 ]; then
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            echo "没有可同步的上游提交，跳过 merge。"
+            exit 0
+          fi
+
+          git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Decide release
+        id: decide
+        env:
+          MERGED: ${{ steps.merge.outputs.merged }}
+          FORCE_RELEASE: ${{ inputs.force_release }}
+        run: |
+          set -euo pipefail
+          do_release="false"
+          if [ "${MERGED}" = "true" ] || [ "${FORCE_RELEASE}" = "true" ]; then
+            do_release="true"
+          fi
+          echo "do_release=${do_release}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js and pnpm
+        if: steps.decide.outputs.do_release == 'true'
+        uses: ./.github/actions/setup-node-pnpm
+        with:
+          install-args: "--frozen-lockfile"
+
+      - name: Build VSIX
+        if: steps.decide.outputs.do_release == 'true'
+        run: pnpm vsix
+
+      - name: Prepare release metadata
+        if: steps.decide.outputs.do_release == 'true'
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./src/package.json').version")"
+          ts="$(date -u +'%Y%m%d-%H%M%S')"
+          tag="sync-v${version}-${ts}"
+          vsix_path="bin/roo-cline-${version}.vsix"
+
+          if [ ! -f "${vsix_path}" ]; then
+            echo "::error::未找到 VSIX 文件：${vsix_path}"
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "vsix_path=${vsix_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.decide.outputs.do_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "Auto Sync VSIX ${{ steps.meta.outputs.version }}" \
+            --notes "自动同步上游并打包 VSIX。上游：${{ steps.upstream.outputs.upstream_repo }}#${{ steps.upstream.outputs.upstream_branch }}" \
+            "${{ steps.meta.outputs.vsix_path }}"

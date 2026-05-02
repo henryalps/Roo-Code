@@ -8,6 +8,25 @@ export const bedrockDefaultModelId: BedrockModelId = "anthropic.claude-sonnet-4-
 
 export const bedrockDefaultPromptRouterModelId: BedrockModelId = "anthropic.claude-3-sonnet-20240229-v1:0"
 
+export const BEDROCK_CUSTOM_ARN_MODEL_IDS = ["custom-arn", "custom-arn-opus4.7"] as const
+
+export type BedrockCustomArnModelId = (typeof BEDROCK_CUSTOM_ARN_MODEL_IDS)[number]
+
+export const BEDROCK_CUSTOM_ARN_BASE_MODEL_IDS = {
+	"custom-arn-opus4.7": "anthropic.claude-opus-4-7",
+} as const satisfies Partial<Record<BedrockCustomArnModelId, BedrockModelId>>
+
+export const isBedrockCustomArnModelId = (modelId?: string): modelId is BedrockCustomArnModelId =>
+	!!modelId && BEDROCK_CUSTOM_ARN_MODEL_IDS.includes(modelId as BedrockCustomArnModelId)
+
+export const getBedrockCustomArnBaseModelId = (modelId?: string): BedrockModelId | undefined => {
+	if (!modelId) {
+		return undefined
+	}
+
+	return BEDROCK_CUSTOM_ARN_BASE_MODEL_IDS[modelId as keyof typeof BEDROCK_CUSTOM_ARN_BASE_MODEL_IDS]
+}
+
 // March, 12 2025 - updated prices to match US-West-2 list price shown at
 // https://aws.amazon.com/bedrock/pricing, including older models that are part
 // of the default prompt routers AWS enabled for GA of the promot router
@@ -142,6 +161,30 @@ export const bedrockModels = {
 		minTokensPerCachePoint: 1024,
 		maxCachePoints: 4,
 		cachableFields: ["system", "messages", "tools"],
+	},
+	"anthropic.claude-opus-4-7": {
+		maxTokens: 8192,
+		contextWindow: 200_000, // Default 200K, extendable to 1M with beta flag 'context-1m-2025-08-07'
+		supportsImages: true,
+		supportsPromptCache: true,
+		supportsReasoningBudget: true,
+		inputPrice: 5.0, // $5 per million input tokens (≤200K context)
+		outputPrice: 25.0, // $25 per million output tokens (≤200K context)
+		cacheWritesPrice: 6.25, // $6.25 per million tokens
+		cacheReadsPrice: 0.5, // $0.50 per million tokens
+		minTokensPerCachePoint: 1024,
+		maxCachePoints: 4,
+		cachableFields: ["system", "messages", "tools"],
+		// Tiered pricing for extended context (requires beta flag 'context-1m-2025-08-07')
+		tiers: [
+			{
+				contextWindow: 1_000_000, // 1M tokens with beta flag
+				inputPrice: 10.0, // $10 per million input tokens (>200K context)
+				outputPrice: 37.5, // $37.50 per million output tokens (>200K context)
+				cacheWritesPrice: 12.5, // $12.50 per million tokens (>200K context)
+				cacheReadsPrice: 1.0, // $1.00 per million tokens (>200K context)
+			},
+		],
 	},
 	"anthropic.claude-opus-4-6-v1": {
 		maxTokens: 8192,
@@ -524,6 +567,7 @@ export const BEDROCK_1M_CONTEXT_MODEL_IDS = [
 	"anthropic.claude-sonnet-4-20250514-v1:0",
 	"anthropic.claude-sonnet-4-5-20250929-v1:0",
 	"anthropic.claude-sonnet-4-6",
+	"anthropic.claude-opus-4-7",
 	"anthropic.claude-opus-4-6-v1",
 ] as const
 
@@ -541,6 +585,7 @@ export const BEDROCK_GLOBAL_INFERENCE_MODEL_IDS = [
 	"anthropic.claude-sonnet-4-6",
 	"anthropic.claude-haiku-4-5-20251001-v1:0",
 	"anthropic.claude-opus-4-5-20251101-v1:0",
+	"anthropic.claude-opus-4-7",
 	"anthropic.claude-opus-4-6-v1",
 ] as const
 

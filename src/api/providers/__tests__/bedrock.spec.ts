@@ -106,6 +106,23 @@ describe("AwsBedrockHandler", () => {
 			expect(modelInfo.info).toBeDefined()
 			expect(modelInfo.info.maxTokens).toBe(4096)
 		})
+
+		it("should use Opus 4.7 capabilities for custom-arn-opus4.7", () => {
+			const customArnHandler = new AwsBedrockHandler({
+				apiModelId: "custom-arn-opus4.7",
+				awsAccessKey: "test-access-key",
+				awsSecretKey: "test-secret-key",
+				awsRegion: "us-east-1",
+				awsCustomArn: "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-opus47",
+			})
+
+			const modelInfo = customArnHandler.getModel()
+			expect(modelInfo.id).toBe("arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-opus47")
+			expect(modelInfo.info.supportsReasoningBudget).toBe(false)
+			expect(modelInfo.info.supportsTemperature).toBe(false)
+			expect(modelInfo.info.supportsReasoningEffort).toEqual(["disable", "low", "medium", "high"])
+			expect(modelInfo.info.contextWindow).toBe(200_000)
+		})
 	})
 
 	describe("region mapping and cross-region inference", () => {

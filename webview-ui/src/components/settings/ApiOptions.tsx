@@ -33,6 +33,7 @@ import {
 	vercelAiGatewayDefaultModelId,
 	minimaxDefaultModelId,
 	unboundDefaultModelId,
+	isBedrockCustomArnModelId,
 } from "@roo-code/types"
 
 import {
@@ -312,8 +313,8 @@ const ApiOptions = ({
 					return
 				}
 
-				// Bedrock has a special “custom-arn” pseudo-model that isn't part of MODELS_BY_PROVIDER.
-				if (provider === "bedrock" && modelId === "custom-arn") {
+				// Bedrock custom ARN pseudo-models are injected outside MODELS_BY_PROVIDER.
+				if (provider === "bedrock" && isBedrockCustomArnModelId(modelId)) {
 					return
 				}
 
@@ -756,7 +757,7 @@ const ApiOptions = ({
 								}
 							/>
 
-							{selectedProvider === "bedrock" && selectedModelId === "custom-arn" && (
+							{selectedProvider === "bedrock" && isBedrockCustomArnModelId(selectedModelId) && (
 								<BedrockCustomArn
 									apiConfiguration={apiConfiguration}
 									setApiConfigurationField={setApiConfigurationField}

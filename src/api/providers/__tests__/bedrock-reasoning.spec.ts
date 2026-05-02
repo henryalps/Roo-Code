@@ -282,6 +282,44 @@ describe("AwsBedrockHandler - Extended Thinking", () => {
 			expect(reasoningChunks[1].text).toBe(" about this problem.")
 		})
 
+		it("should use adaptive thinking for custom-arn-opus4.7", async () => {
+			handler = new AwsBedrockHandler({
+				apiProvider: "bedrock",
+				apiModelId: "custom-arn-opus4.7",
+				awsCustomArn: "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-opus47",
+				awsRegion: "us-east-1",
+				enableReasoningEffort: true,
+				reasoningEffort: "high",
+				modelTemperature: 0.7,
+			})
+
+			mockSend.mockResolvedValue({
+				stream: (async function* () {
+					yield { messageStart: { role: "assistant" } }
+					yield { metadata: { usage: { inputTokens: 100, outputTokens: 50 } } }
+				})(),
+			})
+
+			const messages = [{ role: "user" as const, content: "Test message" }]
+			const stream = handler.createMessage("System prompt", messages)
+
+			for await (const _chunk of stream) {
+				// consume stream
+			}
+
+			expect(mockSend).toHaveBeenCalledTimes(1)
+			expect(capturedPayload).toBeDefined()
+			expect(capturedPayload.additionalModelRequestFields).toBeDefined()
+			expect(capturedPayload.additionalModelRequestFields.thinking).toEqual({
+				type: "adaptive",
+			})
+			expect(capturedPayload.additionalModelRequestFields.output_config).toEqual({
+				effort: "high",
+			})
+			expect(capturedPayload.inferenceConfig).not.toHaveProperty("temperature")
+			expect(capturedPayload).not.toHaveProperty("anthropic_version")
+		})
+
 		it("should support API key authentication", async () => {
 			handler = new AwsBedrockHandler({
 				apiProvider: "bedrock",

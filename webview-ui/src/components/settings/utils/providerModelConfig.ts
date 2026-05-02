@@ -16,6 +16,7 @@ import {
 	fireworksDefaultModelId,
 	minimaxDefaultModelId,
 	basetenDefaultModelId,
+	isBedrockCustomArnModelId,
 } from "@roo-code/types"
 
 import { MODELS_BY_PROVIDER } from "../constants"
@@ -98,6 +99,12 @@ export const getStaticModelsForProvider = (
 				supportsPromptCache: false,
 				description: customArnLabel ?? "Use Custom ARN",
 			},
+			"custom-arn-opus4.7": {
+				maxTokens: 0,
+				contextWindow: 0,
+				supportsPromptCache: false,
+				description: "Use Custom ARN (Claude Opus 4.7)",
+			},
 		}
 	}
 
@@ -146,7 +153,7 @@ export const handleModelChangeSideEffects = <K extends keyof ProviderSettings>(
 	setApiConfigurationField: (field: K, value: ProviderSettings[K]) => void,
 ): void => {
 	// Bedrock: Clear custom ARN if not using custom ARN option
-	if (provider === "bedrock" && modelId !== "custom-arn") {
+	if (provider === "bedrock" && !isBedrockCustomArnModelId(modelId)) {
 		setApiConfigurationField("awsCustomArn" as K, "" as ProviderSettings[K])
 	}
 

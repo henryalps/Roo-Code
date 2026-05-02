@@ -542,6 +542,22 @@ describe("useSelectedModel", () => {
 			expect(result.current.id).toBe("custom-arn")
 			expect(result.current.info?.supportsImages).toBe(true)
 		})
+
+		it("should map custom-arn-opus4.7 to Opus 4.7 capabilities", () => {
+			const apiConfiguration: ProviderSettings = {
+				apiProvider: "bedrock",
+				apiModelId: "custom-arn-opus4.7",
+			}
+
+			const wrapper = createWrapper()
+			const { result } = renderHook(() => useSelectedModel(apiConfiguration), { wrapper })
+
+			expect(result.current.id).toBe("custom-arn-opus4.7")
+			expect(result.current.info?.supportsPromptCache).toBe(true)
+			expect(result.current.info?.supportsImages).toBe(true)
+			expect(result.current.info?.supportsReasoningBudget).toBe(false)
+			expect(result.current.info?.supportsReasoningEffort).toEqual(["disable", "low", "medium", "high"])
+		})
 	})
 
 	describe("litellm provider", () => {

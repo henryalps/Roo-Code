@@ -6,6 +6,7 @@ import {
 	type RouterModels,
 	anthropicModels,
 	bedrockModels,
+	getBedrockCustomArnBaseModelId,
 	deepSeekModels,
 	moonshotModels,
 	minimaxModels,
@@ -31,6 +32,7 @@ import {
 	isDynamicProvider,
 	isRetiredProvider,
 	getProviderDefaultModelId,
+	isBedrockCustomArnModelId,
 } from "@roo-code/types"
 
 import { useRouterModels } from "./useRouterModels"
@@ -181,14 +183,35 @@ function getSelectedModel({
 		}
 		case "bedrock": {
 			const id = apiConfiguration.apiModelId ?? defaultModelId
-			const baseInfo = bedrockModels[id as keyof typeof bedrockModels]
+			const customArnBaseModelId = getBedrockCustomArnBaseModelId(id)
+			const baseInfo = bedrockModels[(customArnBaseModelId ?? id) as keyof typeof bedrockModels]
 
-			// Special case for custom ARN.
+			// Special case for generic custom ARN.
 			if (id === "custom-arn") {
 				return {
 					id,
 					info: { maxTokens: 5000, contextWindow: 128_000, supportsPromptCache: true, supportsImages: true },
 				}
+			}
+
+			// Special case for custom ARN variants with pinned capabilities.
+			if (isBedrockCustomArnModelId(id) && customArnBaseModelId && baseInfo) {
+				const info: ModelInfo = {
+					...baseInfo,
+					supportsReasoningBudget: false,
+					requiredReasoningBudget: false,
+					maxThinkingTokens: undefined,
+					supportsReasoningEffort: ["disable", "low", "medium", "high"],
+				}
+
+				if (
+					BEDROCK_1M_CONTEXT_MODEL_IDS.includes(customArnBaseModelId as any) &&
+					apiConfiguration.awsBedrock1MContext
+				) {
+					info.contextWindow = 1_000_000
+				}
+
+				return { id, info }
 			}
 
 			// Apply 1M context for supported Claude 4 models when enabled

@@ -145,9 +145,12 @@ jobs:
         if: steps.decide.outputs.do_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          echo "Creating release in repo: ${TARGET_REPO}"
           gh release create "${{ steps.meta.outputs.tag }}" \
+            --repo "${TARGET_REPO}" \
             --title "Auto Sync VSIX ${{ steps.meta.outputs.version }}" \
             --notes "自动同步上游并打包 VSIX。上游：${{ steps.upstream.outputs.upstream_repo }}#${{ steps.upstream.outputs.upstream_branch }}" \
             "${{ steps.meta.outputs.vsix_path }}"
